@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#137333">
+<title>ST確認</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<style>
+  body { margin: 0; padding: 16px; font-family: sans-serif; background: #f5f5f5; color: #222; }
+  h1 { font-size: 18px; margin: 0 0 12px; color: #555; display: flex; justify-content: space-between; align-items: center; }
+  h1 a { font-size: 14px; color: #1a73e8; text-decoration: none; }
+  .row { display: flex; gap: 8px; }
+  input { flex: 1; font-size: 22px; padding: 12px; border: 2px solid #999; border-radius: 8px; min-width: 0; letter-spacing: 1px; }
+  button { font-size: 18px; padding: 12px 16px; border: 0; border-radius: 8px; background: #1a73e8; color: #fff; }
+  button.cam { background: #137333; width: 100%; margin-top: 10px; font-size: 22px; padding: 18px; }
+  button.sub { background: #666; width: 100%; margin-top: 8px; }
+  #camwrap { display: none; margin-top: 12px; position: relative; }
+  #camwrap video { width: 100%; border-radius: 12px; background: #000; display: block; }
+  #camwrap .guide { position: absolute; left: 8%; right: 8%; top: 38%; height: 24%; border: 3px solid #ff5252; border-radius: 8px; pointer-events: none; }
+  #camwrap button { width: 100%; margin-top: 8px; background: #c5221f; }
+  #result { margin-top: 16px; padding: 20px 16px; border-radius: 12px; background: #fff; display: none; }
+  .verdict { font-size: 34px; font-weight: bold; margin-bottom: 8px; }
+  .detail { font-size: 17px; line-height: 1.7; }
+  .name { font-size: 14px; color: #555; margin-top: 8px; }
+  .note { font-size: 14px; margin-top: 8px; line-height: 1.6; }
+  .red    { background: #fde2e1 !important; } .red .verdict { color: #c5221f; }
+  .yellow { background: #fff4c2 !important; } .yellow .verdict { color: #8a6100; }
+  .green  { background: #dff3e4 !important; } .green .verdict { color: #137333; }
+  .gray   { background: #e8e8e8 !important; } .gray .verdict { color: #555; }
+  .err    { background: #fff !important; border: 3px dashed #999; } .err .verdict { color: #555; font-size: 24px; }
+  #setup { display: none; background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  #setup p { font-size: 15px; line-height: 1.6; margin: 0 0 10px; }
+  #setup input { width: 100%; box-sizing: border-box; font-size: 14px; letter-spacing: 0; }
+  #setup button { width: 100%; margin-top: 10px; }
+</style>
+</head>
+<body>
+<h1>ST確認 <a href="#" id="opensetup">設定</a></h1>
+
+<div id="setup">
+  <p><b>はじめに1回だけ</b>：Apps Scriptの「ウェブアプリのURL」(最後が <b>/exec</b>)を貼り付けて「保存」を押してください。</p>
+  <input id="gasurl" type="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off">
+  <button id="savesetup">保存</button>
+</div>
+
+<div id="main">
+  <div class="row">
+    <input id="jan" type="text" inputmode="numeric" placeholder="JANを貼り付け" autocomplete="off">
+    <button id="go">調べる</button>
+  </div>
+  <button id="cam" class="cam">📷 カメラで読む</button>
+  <div id="camwrap">
+    <video id="video" playsinline muted></video>
+    <div class="guide"></div>
+    <button id="camstop">カメラを止める</button>
+  </div>
+  <button id="paste" class="sub">コピーしたJANを貼り付けて調べる</button>
+  <div id="result"></div>
+</div>
+
+<script>
+  const SOON_DAYS = 90;
+  const KEY = 'st-gas-url';
+  const $ = id => document.getElementById(id);
+
+  // ── 設定(中継役のURL)。ページには書かず、このスマホの中にだけ覚えさせる ──
+  function getGasUrl() { try { return localStorage.getItem(KEY) || ''; } catch (e) { return ''; } }
+  function validGasUrl(u) { return /^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(u); }
+  function showSetup(on) { $('setup').style.display = on ? 'block' : 'none'; if (on) $('gasurl').value = getGasUrl(); }
+  $('opensetup').onclick = e => { e.preventDefault(); showSetup($('setup').style.display !== 'block'); };
+  $('savesetup').onclick = () => {
+    const u = $('gasurl').value.trim();
+    if (!validGasUrl(u)) { alert('URLの形が違います。\nhttps://script.google.com/macros/s/……/exec の形のURLを貼り付けてください。'); return; }
+    try { localStorage.setItem(KEY, u); } catch (e) { alert('保存できませんでした(シークレットモードでは保存できません)。'); return; }
+    showSetup(false);
+    show('gray', '設定しました', '<div class="note">カメラで読むか、JANを貼り付けて調べてください。</div>');
+  };
+
+  // ── 共通 ──
+  function checkDigitOk(j) {
+    let s = 0;
+    for (let i = 0; i < 12; i++) s += Number(j[i]) * (i % 2 ? 3 : 1);
+    return (10 - s % 10) % 10 === Number(j[12]);
+  }
+  // 文字の中から「13桁でチェックデジットが合う数字」を拾う(共有で商品名などが混ざっても大丈夫なように)
+  function findJan(text) {
+    const runs = String(text || '').replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).match(/\d+/g) || [];
+    const ok = runs.find(r => r.length === 13 && checkDigitOk(r));
+    if (ok) return ok;
+    const any13 = runs.find(r => r.length === 13);
+    return any13 || runs.join('');
+  }
+  function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+  function show(cls, verdict, html) {
+    const r = $('result');
+    r.className = cls;
+    r.innerHTML = '<div class="verdict">' + verdict + '</div>' + html;
+    r.style.display = 'block';
+  }
+
+  // ── 調べる ──
+  async function run(raw) {
+    const jan = findJan(raw);
+    $('jan').value = jan;
+    if (!/^\d{13}$/.test(jan)) { show('err', '13桁のJANではありません', '<div class="note">受け取った内容: ' + esc(raw || '(空)') + '</div>'); return; }
+    if (!checkDigitOk(jan)) { show('err', 'JANの読み取り違いかもしれません', '<div class="note">チェックデジットが合いません。もう一度読み取ってください。</div>'); return; }
+    const gas = getGasUrl();
+    if (!gas) { showSetup(true); show('err', '先に設定が必要です', '<div class="note">上の欄に中継役のURLを貼り付けて保存してください。</div>'); return; }
+
+    show('gray', '調べています…', '<div class="note">' + jan + '</div>');
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 20000);
+    let res;
+    try {
+      const r = await fetch(gas + '?jan=' + jan, { signal: ctl.signal });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      res = await r.json();
+    } catch (e) {
+      res = { error: e.name === 'AbortError' ? '時間内に返事がありませんでした(電波が弱い可能性)。' : '通信できませんでした(電波が弱い・設定のURL違いの可能性)。' };
+    } finally {
+      clearTimeout(timer);
+    }
+    render(jan, res);
+  }
+
+  function render(jan, res) {
+    if (!res || res.error || !Array.isArray(res.hits)) {
+      show('err', '⚪ 調べられませんでした', '<div class="note">' + esc((res && res.error) || '返ってきた内容が読めませんでした。') +
+        '<br><b>※「ST登録なし」「失効」という意味ではありません。</b></div>');
+      return;
+    }
+    if (!res.hits.length) {
+      show('gray', 'ST登録なし', '<div class="detail">' + jan + ' はST検索に登録がありません。</div>');
+      return;
+    }
+    const last = res.hits.reduce((a, b) => (b.date > a.date ? b : a));   // 最新の合格
+    const [y, m, d] = last.date.split('/').map(Number);
+    const exp = new Date(y + 2, m - 1, d);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const days = Math.round((exp - today) / 86400000);
+    const expStr = exp.getFullYear() + '/' + String(exp.getMonth() + 1).padStart(2, '0') + '/' + String(exp.getDate()).padStart(2, '0');
+    let cls, verdict, line;
+    if (days < 0)               { cls = 'red';    verdict = '🔴 失効';         line = expStr + ' に失効(' + (-days) + '日経過)'; }
+    else if (days <= SOON_DAYS) { cls = 'yellow'; verdict = '🟡 まもなく失効'; line = expStr + ' に失効(あと' + days + '日)'; }
+    else                        { cls = 'green';  verdict = '🟢 有効';         line = expStr + ' まで有効(あと' + days + '日)'; }
+    show(cls, verdict,
+      '<div class="detail">' + line + '<br>最新合格 ' + last.date + ' ／ 合格' + res.hits.length + '回</div>' +
+      '<div class="name">' + esc(jan) + '<br>' + esc(last.name) + '<br>' + esc(last.company) + '</div>');
+  }
+
+  // ── 貼り付け ──
+  async function pasteAndRun(quiet) {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t) run(t);
+    } catch (e) {
+      if (quiet === true) return;
+      $('jan').value = '';
+      $('jan').focus();
+      show('err', '入力欄に貼り付けてください', '<div class="note">クリップボードを自動で読めませんでした。入力欄を長押し →「貼り付け」で入れると、自動で調べます。</div>');
+    }
+  }
+  $('go').onclick = () => run($('jan').value);
+  $('paste').onclick = pasteAndRun;
+  $('jan').addEventListener('paste', e => {
+    const t = (e.clipboardData || window.clipboardData).getData('text');
+    if (t) { e.preventDefault(); run(t); }
+  });
+  $('jan').addEventListener('input', () => {
+    const v = $('jan').value.replace(/\D/g, '');
+    if (v.length === 13) run(v);
+  });
+  $('jan').addEventListener('keydown', e => { if (e.key === 'Enter') run($('jan').value); });
+
+  // ── カメラ(Android Chrome内蔵の BarcodeDetector) ──
+  let camStream = null, camTimer = null;
+  function stopCam() {
+    if (camTimer) { clearTimeout(camTimer); camTimer = null; }
+    if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+    $('camwrap').style.display = 'none';
+    $('cam').style.display = 'block';
+  }
+  async function startCam() {
+    if (!('BarcodeDetector' in window)) {
+      show('err', 'バーコードを読めません', '<div class="note">このブラウザにはバーコード読み取り機能がありません。AndroidのChromeで開いてください。</div>');
+      return;
+    }
+    let detector;
+    try { detector = new BarcodeDetector({ formats: ['ean_13'] }); }
+    catch (e) { show('err', 'バーコードを読めません', '<div class="note">' + esc(e.name + ': ' + e.message) + '</div>'); return; }
+    try {
+      camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    } catch (e) {
+      const why = e.name === 'NotAllowedError'
+        ? 'カメラの使用が許可されていません。Chromeのアドレス欄の左のマーク →「権限」→ カメラを「許可」にしてください。'
+        : 'カメラを起動できませんでした。';
+      show('err', '📷 カメラを使えません', '<div class="note">' + why + '<br>(' + esc(e.name) + ')</div>');
+      return;
+    }
+    const v = $('video');
+    v.srcObject = camStream;
+    await v.play();
+    $('cam').style.display = 'none';
+    $('camwrap').style.display = 'block';
+    $('result').style.display = 'none';
+    const scan = async () => {
+      if (!camStream) return;
+      try {
+        const codes = await detector.detect(v);
+        const hit = codes.map(c => c.rawValue).find(s => /^\d{13}$/.test(s) && checkDigitOk(s));
+        if (hit) {
+          if (navigator.vibrate) navigator.vibrate(100);
+          stopCam();
+          run(hit);
+          return;
+        }
+      } catch (e) { /* 1コマ読めないのは普通。次のコマへ */ }
+      camTimer = setTimeout(scan, 150);
+    };
+    scan();
+  }
+  $('cam').onclick = startCam;
+  $('camstop').onclick = stopCam;
+
+  // ── 起動時 ──
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (!getGasUrl()) showSetup(true);
+
+  // アマサーチなどから「共有」で開かれたときは、渡された文字からJANを拾ってすぐ調べる
+  const q = new URLSearchParams(location.search);
+  const shared = [q.get('text'), q.get('title'), q.get('url')].filter(Boolean).join(' ');
+  if (shared) {
+    history.replaceState(null, '', location.pathname);   // 再読み込みで同じJANを調べ直さないように
+    run(shared);
+  }
+  // ※開いたときにクリップボードを自動で読むのはやめた(カメラで読みたいときに前のJANを勝手に調べてしまうため)
+</script>
+</body>
+</html>
