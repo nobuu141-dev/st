@@ -9,8 +9,9 @@
 <link rel="icon" href="icon-192.png">
 <style>
   body { margin: 0; padding: 16px; font-family: sans-serif; background: #f5f5f5; color: #222; }
-  h1 { font-size: 18px; margin: 0 0 12px; color: #555; display: flex; justify-content: space-between; align-items: center; }
-  h1 a { font-size: 14px; color: #1a73e8; text-decoration: none; }
+  h1 { font-size: 18px; margin: 0 0 12px; color: #555; display: flex; align-items: center; gap: 16px; }
+  h1 span { flex: 1; }
+  h1 a { font-size: 15px; color: #1a73e8; text-decoration: none; padding: 4px 2px; }
   .row { display: flex; gap: 8px; }
   input { flex: 1; font-size: 22px; padding: 12px; border: 2px solid #999; border-radius: 8px; min-width: 0; letter-spacing: 1px; }
   button { font-size: 18px; padding: 12px 16px; border: 0; border-radius: 8px; background: #1a73e8; color: #fff; }
@@ -31,17 +32,33 @@
   .gray   { background: #e8e8e8 !important; } .gray .verdict { color: #555; }
   .err    { background: #fff !important; border: 3px dashed #999; } .err .verdict { color: #555; font-size: 24px; }
   #setup { display: none; background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-  #setup p { font-size: 15px; line-height: 1.6; margin: 0 0 10px; }
-  #setup input { width: 100%; box-sizing: border-box; font-size: 14px; letter-spacing: 0; }
-  #setup button { width: 100%; margin-top: 10px; }
+  #setup p { font-size: 15px; line-height: 1.6; margin: 0 0 6px; }
+  #setup label { display: block; font-size: 14px; font-weight: bold; margin: 12px 0 4px; }
+  #setup input { width: 100%; box-sizing: border-box; font-size: 16px; letter-spacing: 0; }
+  #setup button { width: 100%; margin-top: 12px; }
+  /* 履歴 */
+  #history { display: none; }
+  #history .head { font-size: 14px; color: #555; margin-bottom: 8px; }
+  .hitem { background: #fff; border-radius: 10px; padding: 12px; margin-bottom: 8px; border-left: 8px solid #bbb; }
+  .hitem.red { border-left-color: #c5221f; } .hitem.yellow { border-left-color: #e0a800; }
+  .hitem.green { border-left-color: #137333; } .hitem.gray { border-left-color: #999; }
+  .hitem .top { display: flex; justify-content: space-between; font-size: 15px; }
+  .hitem .top b { font-size: 16px; }
+  .hitem .hn { font-size: 15px; margin-top: 4px; }
+  .hitem .hs { font-size: 13px; color: #555; margin-top: 2px; }
+  #history .empty { color: #777; padding: 24px 0; text-align: center; }
+  #history button.clear { background: #fff; color: #c5221f; border: 1px solid #c5221f; width: 100%; margin: 16px 0; font-size: 15px; }
 </style>
 </head>
 <body>
-<h1>ST確認 <a href="#" id="opensetup">設定</a></h1>
+<h1><span>ST確認</span><a href="#" id="openhist">履歴</a><a href="#" id="opensetup">設定</a></h1>
 
 <div id="setup">
-  <p><b>はじめに1回だけ</b>：Apps Scriptの「ウェブアプリのURL」(最後が <b>/exec</b>)を貼り付けて「保存」を押してください。</p>
+  <p><b>はじめに1回だけ</b>：下の2つを入れて「保存」を押してください。</p>
+  <label for="gasurl">① 中継役のURL(最後が /exec)</label>
   <input id="gasurl" type="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off">
+  <label for="gaskey">② 合言葉(英数字10文字)</label>
+  <input id="gaskey" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
   <button id="savesetup">保存</button>
 </div>
 
@@ -60,20 +77,37 @@
   <div id="result"></div>
 </div>
 
+<div id="history">
+  <div class="head">新しい順 ／ 押すともう一度調べます</div>
+  <div id="hlist"></div>
+  <button class="clear" id="hclear">履歴を全部消す(このスマホの中だけ)</button>
+</div>
+
 <script>
   const SOON_DAYS = 90;
-  const KEY = 'st-gas-url';
+  const URL_KEY = 'st-gas-url', PASS_KEY = 'st-gas-key', HIST_KEY = 'st-history';
+  const HIST_MAX = 500;
   const $ = id => document.getElementById(id);
 
-  // ── 設定(中継役のURL)。ページには書かず、このスマホの中にだけ覚えさせる ──
-  function getGasUrl() { try { return localStorage.getItem(KEY) || ''; } catch (e) { return ''; } }
+  // ── 保存(このスマホの中だけ) ──
+  function load(k, def) { try { const v = localStorage.getItem(k); return v === null ? def : v; } catch (e) { return def; } }
+  function save(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
+
+  // ── 設定(中継役のURLと合言葉)。ページには書かず、このスマホの中にだけ覚えさせる ──
+  function getGasUrl() { return load(URL_KEY, ''); }
+  function getGasKey() { return load(PASS_KEY, ''); }
   function validGasUrl(u) { return /^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(u); }
-  function showSetup(on) { $('setup').style.display = on ? 'block' : 'none'; if (on) $('gasurl').value = getGasUrl(); }
+  function showSetup(on) {
+    $('setup').style.display = on ? 'block' : 'none';
+    if (on) { $('gasurl').value = getGasUrl(); $('gaskey').value = getGasKey(); showHistory(false); }
+  }
   $('opensetup').onclick = e => { e.preventDefault(); showSetup($('setup').style.display !== 'block'); };
   $('savesetup').onclick = () => {
     const u = $('gasurl').value.trim();
+    const k = $('gaskey').value.trim();
     if (!validGasUrl(u)) { alert('URLの形が違います。\nhttps://script.google.com/macros/s/……/exec の形のURLを貼り付けてください。'); return; }
-    try { localStorage.setItem(KEY, u); } catch (e) { alert('保存できませんでした(シークレットモードでは保存できません)。'); return; }
+    if (!/^[a-z0-9]{10}$/.test(k)) { alert('合言葉は英小文字と数字の10文字です。'); return; }
+    if (!save(URL_KEY, u) || !save(PASS_KEY, k)) { alert('保存できませんでした(シークレットモードでは保存できません)。'); return; }
     showSetup(false);
     show('gray', '設定しました', '<div class="note">カメラで読むか、JANを貼り付けて調べてください。</div>');
   };
@@ -93,6 +127,9 @@
     return any13 || runs.join('');
   }
   function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function fmtDate(d) { return d.getFullYear() + '/' + pad(d.getMonth() + 1) + '/' + pad(d.getDate()); }
+  function fmtDateTime(d) { return fmtDate(d) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()); }
   function show(cls, verdict, html) {
     const r = $('result');
     r.className = cls;
@@ -100,21 +137,23 @@
     r.style.display = 'block';
   }
 
-  // ── 調べる ──
-  async function run(raw) {
+  // ── 調べる ──  via: share / camera / paste / history (スプレッドシートの「調べ方」列になる)
+  async function run(raw, via) {
+    showHistory(false);
     const jan = findJan(raw);
     $('jan').value = jan;
     if (!/^\d{13}$/.test(jan)) { show('err', '13桁のJANではありません', '<div class="note">受け取った内容: ' + esc(raw || '(空)') + '</div>'); return; }
     if (!checkDigitOk(jan)) { show('err', 'JANの読み取り違いかもしれません', '<div class="note">チェックデジットが合いません。もう一度読み取ってください。</div>'); return; }
-    const gas = getGasUrl();
-    if (!gas) { showSetup(true); show('err', '先に設定が必要です', '<div class="note">上の欄に中継役のURLを貼り付けて保存してください。</div>'); return; }
+    const gas = getGasUrl(), key = getGasKey();
+    if (!gas || !key) { showSetup(true); show('err', '先に設定が必要です', '<div class="note">上の欄に中継役のURLと合言葉を入れて保存してください。</div>'); return; }
 
     show('gray', '調べています…', '<div class="note">' + jan + '</div>');
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 20000);
     let res;
     try {
-      const r = await fetch(gas + '?jan=' + jan, { signal: ctl.signal });
+      const q = '?jan=' + jan + '&key=' + encodeURIComponent(key) + '&via=' + encodeURIComponent(via || 'paste');
+      const r = await fetch(gas + q, { signal: ctl.signal });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       res = await r.json();
     } catch (e) {
@@ -131,8 +170,11 @@
         '<br><b>※「ST登録なし」「失効」という意味ではありません。</b></div>');
       return;
     }
+    const when = fmtDateTime(new Date());
+    const logNote = res.logError ? '<div class="note">※ ' + esc(res.logError) + '(判定は正しく出ています)</div>' : '';
     if (!res.hits.length) {
-      show('gray', 'ST登録なし', '<div class="detail">' + jan + ' はST検索に登録がありません。</div>');
+      show('gray', 'ST登録なし', '<div class="detail">' + jan + ' はST検索に登録がありません。</div>' + logNote);
+      addHistory({ t: when, jan: jan, cls: 'gray', verdict: 'ST登録なし', name: '', exp: '', count: 0 });
       return;
     }
     const last = res.hits.reduce((a, b) => (b.date > a.date ? b : a));   // 最新の合格
@@ -140,21 +182,60 @@
     const exp = new Date(y + 2, m - 1, d);
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const days = Math.round((exp - today) / 86400000);
-    const expStr = exp.getFullYear() + '/' + String(exp.getMonth() + 1).padStart(2, '0') + '/' + String(exp.getDate()).padStart(2, '0');
+    const expStr = fmtDate(exp);
     let cls, verdict, line;
     if (days < 0)               { cls = 'red';    verdict = '🔴 失効';         line = expStr + ' に失効(' + (-days) + '日経過)'; }
     else if (days <= SOON_DAYS) { cls = 'yellow'; verdict = '🟡 まもなく失効'; line = expStr + ' に失効(あと' + days + '日)'; }
     else                        { cls = 'green';  verdict = '🟢 有効';         line = expStr + ' まで有効(あと' + days + '日)'; }
     show(cls, verdict,
       '<div class="detail">' + line + '<br>最新合格 ' + last.date + ' ／ 合格' + res.hits.length + '回</div>' +
-      '<div class="name">' + esc(jan) + '<br>' + esc(last.name) + '<br>' + esc(last.company) + '</div>');
+      '<div class="name">' + esc(jan) + '<br>' + esc(last.name) + '<br>' + esc(last.company) + '</div>' + logNote);
+    addHistory({ t: when, jan: jan, cls: cls, verdict: verdict, name: last.name, exp: expStr, count: res.hits.length });
   }
+
+  // ── 履歴(このスマホの中。全件はスプレッドシート「ST確認_履歴」に残る) ──
+  function getHistory() { try { return JSON.parse(load(HIST_KEY, '[]')) || []; } catch (e) { return []; } }
+  function addHistory(item) {
+    const list = getHistory();
+    list.unshift(item);
+    save(HIST_KEY, JSON.stringify(list.slice(0, HIST_MAX)));
+  }
+  function renderHistory() {
+    const list = getHistory();
+    if (!list.length) { $('hlist').innerHTML = '<div class="empty">まだ履歴はありません</div>'; return; }
+    $('hlist').innerHTML = list.map((h, i) => {
+      const verdictText = h.cls === 'gray' ? h.verdict : h.verdict;
+      const sub = h.cls === 'gray' ? h.jan : (h.jan + ' ／ ' + h.exp + (h.cls === 'green' ? ' まで有効' : ' 失効') + ' ／ 合格' + h.count + '回');
+      return '<div class="hitem ' + esc(h.cls) + '" data-i="' + i + '">' +
+        '<div class="top"><span>' + esc(h.t) + '</span><b>' + esc(verdictText) + '</b></div>' +
+        (h.name ? '<div class="hn">' + esc(h.name) + '</div>' : '') +
+        '<div class="hs">' + esc(sub) + '</div></div>';
+    }).join('');
+  }
+  function showHistory(on) {
+    $('history').style.display = on ? 'block' : 'none';
+    $('main').style.display = on ? 'none' : 'block';
+    $('openhist').textContent = on ? '戻る' : '履歴';
+    if (on) { stopCam(); $('setup').style.display = 'none'; renderHistory(); window.scrollTo(0, 0); }
+  }
+  $('openhist').onclick = e => { e.preventDefault(); showHistory($('history').style.display !== 'block'); };
+  $('hlist').onclick = e => {
+    const el = e.target.closest('.hitem');
+    if (!el) return;
+    const h = getHistory()[Number(el.dataset.i)];
+    if (h) run(h.jan, 'history');
+  };
+  $('hclear').onclick = () => {
+    if (!confirm('このスマホの中の履歴を全部消します。\n(スプレッドシートの記録は消えません)\nよろしいですか?')) return;
+    save(HIST_KEY, '[]');
+    renderHistory();
+  };
 
   // ── 貼り付け ──
   async function pasteAndRun(quiet) {
     try {
       const t = await navigator.clipboard.readText();
-      if (t) run(t);
+      if (t) run(t, 'paste');
     } catch (e) {
       if (quiet === true) return;
       $('jan').value = '';
@@ -162,17 +243,17 @@
       show('err', '入力欄に貼り付けてください', '<div class="note">クリップボードを自動で読めませんでした。入力欄を長押し →「貼り付け」で入れると、自動で調べます。</div>');
     }
   }
-  $('go').onclick = () => run($('jan').value);
+  $('go').onclick = () => run($('jan').value, 'paste');
   $('paste').onclick = pasteAndRun;
   $('jan').addEventListener('paste', e => {
     const t = (e.clipboardData || window.clipboardData).getData('text');
-    if (t) { e.preventDefault(); run(t); }
+    if (t) { e.preventDefault(); run(t, 'paste'); }
   });
   $('jan').addEventListener('input', () => {
     const v = $('jan').value.replace(/\D/g, '');
-    if (v.length === 13) run(v);
+    if (v.length === 13) run(v, 'paste');
   });
-  $('jan').addEventListener('keydown', e => { if (e.key === 'Enter') run($('jan').value); });
+  $('jan').addEventListener('keydown', e => { if (e.key === 'Enter') run($('jan').value, 'paste'); });
 
   // ── カメラ(Android Chrome内蔵の BarcodeDetector) ──
   let camStream = null, camTimer = null;
@@ -213,7 +294,7 @@
         if (hit) {
           if (navigator.vibrate) navigator.vibrate(100);
           stopCam();
-          run(hit);
+          run(hit, 'camera');
           return;
         }
       } catch (e) { /* 1コマ読めないのは普通。次のコマへ */ }
@@ -226,14 +307,14 @@
 
   // ── 起動時 ──
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-  if (!getGasUrl()) showSetup(true);
+  if (!getGasUrl() || !getGasKey()) showSetup(true);
 
   // アマサーチなどから「共有」で開かれたときは、渡された文字からJANを拾ってすぐ調べる
   const q = new URLSearchParams(location.search);
   const shared = [q.get('text'), q.get('title'), q.get('url')].filter(Boolean).join(' ');
   if (shared) {
     history.replaceState(null, '', location.pathname);   // 再読み込みで同じJANを調べ直さないように
-    run(shared);
+    run(shared, 'share');
   }
   // ※開いたときにクリップボードを自動で読むのはやめた(カメラで読みたいときに前のJANを勝手に調べてしまうため)
 </script>

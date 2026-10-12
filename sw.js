@@ -2,7 +2,7 @@
 // 役割は「インストールできるアプリ」にすることと、電波が弱くても画面だけは開けるようにすること。
 // ST検索の結果(script.google.com への問い合わせ)は覚えない。毎回その場で調べる。
 
-const CACHE = 'st-kakunin-v1';
+const CACHE = 'st-kakunin-v2';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
